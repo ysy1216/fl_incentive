@@ -5,7 +5,7 @@ import numpy as np
 import argparse
 import torch.nn.functional as F
 import torch.optim as optim
-from opacus import PrivacyEngine
+import opacus 
 from opacus.utils.uniform_sampler import UniformWithReplacementSampler
 from torchvision import datasets, transforms
 from tqdm import tqdm
@@ -13,6 +13,7 @@ import math
 import itertools
 import random
 import copy
+from fl_tools import *
 '''
 CLDP-SGD Model Architecture for MNIST
 Layer               Parameters
@@ -53,68 +54,54 @@ def get_data_loaders():
     train_data = datasets.MNIST('./data', train=True, download=True, transform=transform)
     test_data = datasets.MNIST('./data', train=False, transform=transform)
 
-    train_loader = DataLoader(train_data, batch_size=64, shuffle=True)
-    test_loader = DataLoader(test_data, batch_size=1000, shuffle=False)
+    train_loader = DataLoader(train_data, batch_size=64, shuffle=True) #6w/b
+    test_loader = DataLoader(test_data, batch_size=1000, shuffle=False) #1w/b
 
-    return train_loader, test_loader,train_data,test_data
+    return train_loader, test_loader
 
 # 训练客户端
-def client_train(local_model,loss_func,device,optimizer, data,target):
+def client_train(local_model,loss_func,device,optimizer, train_loader):
     local_model.train()
-    local_model.to(device)
-    data = torch.tensor(data, dtype=torch.float32,device=device)
-    target = torch.tensor(target, dtype=torch.float32,device=device)
-    optimizer.zero_grad()
-    output = local_model(data)
-    loss = loss_func(output, target)
-    loss.backward()
-    optimizer.step()
-  
+    for i,(x,y) in enumerate(train_loader):
+        x=x.to(device)
+        y=y.to(device)
+        optimizer.zero_grad()
+        loss = loss_func(local_model(x), y)
+        loss.backward()
+        optimizer.step()
     return local_model,loss
 
 
 # 训练服务端  
-def server_train(model,loss_func,device, optimizer, data,target):
+def server_train(model,loss_func,device,optimizer, data_loader):
     model.train()
-    model.to(device)
-    data= torch.tensor(data, dtype=torch.float32,device=device)
-    target=torch.tensor(target, dtype=torch.float32,device=device)
-    optimizer.zero_grad()
-    output = model(data)
-    loss = loss_func(output, target)
-    loss.backward()
-    optimizer.step()
-      
+    for i,(x,y) in enumerate(data_loader):
+        x=x.to(device)
+        y=y.to(device)
+        optimizer.zero_grad()
+        loss = loss_func(model(x), y)
+        loss.backward()
+        optimizer.step()
     return model,loss
+      
 
 
 
 # 测试模型
-def test_model(model, loss_func, device, test_loader):
+def test_model(model,device,test_loader):
+    #返回所有客户端测试的精度统计列表
     model.eval()
-    test_loss = 0
-    correct = 0
+    total,correct=0,0
     with torch.no_grad():
-        for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
-            output = model(data)
-            test_loss += loss_func(output,target.unsqueeze(1)).item() # sum up batch loss
-            pred = output.argmax(
-                dim=1, keepdim=True
-            )  # get the index of the max log-probability
-            correct += pred.eq(target.view_as(pred)).sum().item()
+        for i,(x,y) in enumerate(test_loader):
+            x,y=x.to(device),y.to(device)
+            pred=model(x).argmax(1)
+            correct += (pred == y).sum().item()
+            total += y.size(0)
+    
+    accuracy = 100.0 * correct / total
+    return accuracy
 
-    test_loss /= len(test_loader.dataset)
-    return test_loss,correct / len(test_loader.dataset)
-
-
-def average_weights(w):
-    w_avg = copy.deepcopy(w[0])
-    for key in w_avg.keys():
-        for i in range(1, len(w)):
-            w_avg[key] += w[i][key]
-        w_avg[key] = torch.div(w_avg[key], len(w))
-    return w_avg
 
 
 #clients_gradients是一个元素大小为10的列表，每一个元素包含一个OrderedDict。
@@ -131,85 +118,31 @@ def average_weights(w):
 #从client_gradients中剥离出相同层的梯度,然后输出格式为[[tensor1,tensor2...tensor10],[tensor1,tensor2..tensor10]...[]]
 #输出的layers_list的格式为8*10 表示8层中10个客户端的梯度 剥离出8*len(client_gradindts)的大小列表
 
-# def boli(client_gradients):
-#     """
-#     从 client_gradients 中剥离出相同层的梯度
 
-#     Args:
-#         client_gradients: 大小为 10 的列表，每一个元素包含一个 OrderedDict。
-#                           每个 OrderedDict 中包含 8 个 ('layer_name', tensor(梯度)): 包含
-#                           conv1.weight 层，conv1.bias 层，conv2.weight 层，conv2.bias 层，
-#                           fc1.weight 层 fc.bias 层，fc2.weight 层 fc2.bias 层 共 8 个。
+# from fl_shapley import compute_shapley_value
+# def compute_shapley_value(lst, weights=None):
+#     n = len(lst)
+#     if weights is None:
+#         weights = np.ones(n)
+#     else:
+#         weights = np.array(weights)
 
-#     Returns:
-#         layers_list: 列表，包含每个层的所有客户端的梯度向量集合，格式为[[tensor1,tensor2...tensor10],[tensor1,tensor2..tensor10]...[]]
-#     """
-#     layers_name= ['conv1.weight','conv1.bias','conv2.weight','conv2.bias','fc1.weight','fc1.bias','fc2.weight','fc2.bias']
-#     layers_list = [[] for _ in range(8)] # 初始化每个层的梯度张量集合
-#     n=len(client_gradients)
-#     for i in range(len(layers_name)):
-#         for j in range(len(client_gradients)):
-#             for k,v in client_gradients[j].items():
-#                 if k==layers_name[i]:
-#                     layers_list[i].append([v])
-#     return layers_list,len(layers_list[7]),len(layers_list[7][0])  #8*10  8层  10个客户端的每一层
+#     shapley_values = np.zeros(n)
+#     for i in range(n):
+#         for j in range(1, n+1):
+#             for combination in itertools.combinations(range(n), j):
+#                 if i in combination:
+#                     weight_sum = np.sum(weights[list(combination)])
+#                     marginal_contribution = np.sum(np.array([lst[k][1] for k in combination])) / weight_sum
+#                     shapley_values[i] += marginal_contribution * math.factorial(n - len(combination)) * math.factorial(len(combination) - 1)
 
-# def compute_shapley_value(layer_gard, weights=None):
-#     """
-#     计算每个客户端的 Shapley 值和重新加权梯度
-#     Args:
-#         layer_gard: 所有客户端某一层的所有梯度集合
-#         weights: tensor, 客户端的权重，用于加权计算平均梯度向量。默认为均匀分布。
-        
-#     Returns:
-#         shapley_values: list of floats, 每个客户端的 Shapley 值
-#         reweighted_average_grad: tensor, 重新加权后的该网络层的平均梯度向量
-#     """
-
-#     return shapley_values,the_average_grad  #该层所有元素所占的shapley值，以及根据shapley值更新的该梯度均值
-
-# def pinjie(global_model):
-#     #将各个层进行shapley值求加权平均后，加载到全局模型参数上
-#     return global_model
+#     result = [[lst[i][0], shapley_values[i] / math.factorial(n)] for i in range(n)]
+#     return result  #返回客户端id对应的shapley值
 
 
-# def  sample_data(train_data,num_clients,cur_c_num):
-#     #随机抽样cur_c_num个客户端的cur份数据
-#     data_idx = random.sample(range(len(train_data)), cur_c_num)
-#     client_data = [train_data[i] for i in data_idx] # 10个(x,y)数据点给10个客户端
-
-#     client_ids = list(range(num_clients)) # 所有客户端ID
-#     selected_ids = random.sample(client_ids, cur_c_num) # 随机选择10个户端
-#     print(f'本轮随机抽取的客户端id是{selected_ids}')
-#     client_data = [[id,x,y] for id,(x,y) in zip(selected_ids, client_data)]  #组装[id,x,y]
-#     return client_data
-
-
-def compute_shapley_value(lst, weights=None):
-    n = len(lst)
-    if weights is None:
-        weights = np.ones(n)
-    else:
-        weights = np.array(weights)
-
-    shapley_values = np.zeros(n)
-    for i in range(n):
-        for j in range(1, n+1):
-            for combination in itertools.combinations(range(n), j):
-                if i in combination:
-                    weight_sum = np.sum(weights[list(combination)])
-                    marginal_contribution = np.sum(np.array([lst[k][1] for k in combination])) / weight_sum
-                    shapley_values[i] += marginal_contribution * math.factorial(n - len(combination)) * math.factorial(len(combination) - 1)
-
-    result = [[lst[i][0], shapley_values[i] / math.factorial(n)] for i in range(n)]
-    return result
-
-
-
-def shapley_juhe(global_model,optimizer,local_grads,shapley_weights):
+def shapley_juhe(global_model,optimizer,local_grads,shapley_weights):  #全局模型，各个客户端的梯度，shapley权重值
     #根据shapley值来更新全局模型
-    shapley_weights= [w / sum(shapley_weights) for w in shapley_weights]
-    print(shapley_weights)
+    print(f'聚合比列表sapley_weights:{shapley_weights}')
     for i, params in enumerate(global_model.parameters()):
         if params.grad is None:
             continue
@@ -222,86 +155,78 @@ def shapley_juhe(global_model,optimizer,local_grads,shapley_weights):
 
 
 def main():
-    lr=0.01
-    epoches=100
-    # num_clients=60
-    # cur_c_num=10
-    num_clients=60000
-    cur_c_num=10000
-    loss_func=nn.MSELoss(reduction='mean')
+    alpha = 1/100        # 梯度裁剪比例
+    epsilon = 1.5        # 隐私预算
+    lr=0.1
+    epoches=40
+    num_clients=100
+    # cur_c_num=10000
+    # privacy_engine = opacus.PrivacyEngine()
+    loss_func=nn.CrossEntropyLoss()
     device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
     global_model = SampleConvNet().to(device)
+    server_optimizer = optim.SGD(global_model.parameters(), lr=lr)
     client_models = [SampleConvNet().to(device) for _ in range(num_clients)]
-
-    train_loader, test_loader ,train_data,test_data = get_data_loaders()
-
+    client_optimizers = [optim.SGD(model.parameters(), lr=lr) for model in client_models]
+    train_loader, test_loader= get_data_loaders()
 
     #开始训练
+    '''
+    每个轮次，60000个客户端训练,针对60000个模型的梯度加入拉普拉斯噪声，随机挑选10000梯度裁剪，裁剪比例是1/100，测试各个6万个模型的acc，针对acc列表进行shapley值，对应聚合全局模型，训练全局模型并测试。
+    '''
     for epoch in range(epoches):
         print(f"Round {epoch + 1}/{epoches}")
-        #随机抽样cur_c_num个客户端的cur份数据
-        data_idx = random.sample(range(len(train_data)), cur_c_num)  #随机选取10个数字
-        client_data = [train_data[i] for i in data_idx] # 10个(x,y)数据点给10个客户端
-
-        client_ids = list(range(num_clients)) # 所有客户端ID
-        selected_ids = random.sample(client_ids, cur_c_num) # 随机选择10个户端
-        print(f'本轮随机抽取的客户端id是{selected_ids}')
-        client_data = [[id,x,y] for id,(x,y) in zip(selected_ids, client_data)]  #组装[id,x,y]
-        # client_data=sample_data(train_data,num_clients,cur_c_num)
-        client_optimizers = [optim.SGD(model.parameters(), lr=lr) for model in client_models]
-        
-        
         #训练客户端
-        local_grads = []  #记录所有客户端的总梯度用于计算对应shapley值
-        for id,x,y in client_data:
-            cur_model,loss=client_train(client_models[id],loss_func,device, client_optimizers[id], x,y) #第id个本地模型训练后的模型和损失
-            print(f'第{id}个客户端在该轮次的train_loss为{loss.item()}')
+        grads = []  #记录所有客户端的总梯度用于加噪裁剪和计算对应shapley值
+        for id in range(num_clients):
+            model,loss=client_train(client_models[id],loss_func,device, client_optimizers[id], train_loader) #第id个本地模型训练后的模型和损失
+            print(f'第{epoch}轮次中第{id}个客户端在该轮次的train_loss为{loss}')
             #收集本轮次中该客户端的本地梯度
-            local_grads.append([param.grad.clone() for param in cur_model.parameters()])
+            grads.append([param.grad.clone() for param in model.parameters()])
 
+        #梯度处理，加入拉普拉斯噪声并随机梯度裁剪
+        # indices = random.sample(range(len(grads)), 10000)
+        # privacy_engine.make_private([grads[i] for i in indices], alpha, target_epsilon=epsilon)
+        # # print('privacy:',本轮所有客户端加入的噪声量是多少，对应的隐私预算是多少??
+        # clipped_grads = [grads[i].mul(alpha) for i, alpha in zip(indices, alpha)]
+        # #将裁剪梯度完的1万个梯度与原来6万个梯度对应合并成新的梯度列表
+        # grads=...新的梯度列表
 
         #测试客户端
-        t_data_idx = random.sample(range(len(test_data)), cur_c_num)
-        test_train_data= [train_data[i] for i in t_data_idx] # 10个(x,y)数据点给10个客户端
-        test_data = [[id,x,y] for id,(x,y) in zip(selected_ids, test_train_data)]
-        test_losses=[]
-        test_acces=[]
-        for idx in selected_ids:
-            test_loss,test_acc=test_model(client_models[idx],loss_func,device,test_loader)
-            test_losses.append([idx,test_loss])
-            test_acces.append([idx,test_acc])
-
-        #保留测试的mse值 进行shapley计算 
+        acces=[]
+        for id in range(num_clients):
+            acc=test_model(client_models[id],device,test_loader)
+            acces.append(acc)
+            print(f'第{epoch}轮次中第{id}的客户端在测试集的精度为{acc}')
+        #求shapley值
+        #保留测试的mse值 进行shapley计算 ，但越高的mse贡献越大，所以采用acc
         #基于mse的shapley值计算//基于acc的shpaley值计算
-        shapley_values=compute_shapley_value(test_acces)# [[id,shapley1],[id2,s2]...]
-
+        shapley_values=compute_shapley_value(acces)
+        #当出现负值的shapley值，我们认定该值是无效客户端或者恶意客户端表现出的来性能，我们直接设为0
+        shapley_values=np.array(shapley_values)
+        shapley_values[shapley_values<=0]=0
+        shapley_values/=shapley_values.sum()
+        shapley_values=list(shapley_values)
         # print(shapley_values)
-        new_list = [item[1] for item in shapley_values]  #列出shapley值列表，与梯度列表对应
-        print(f'该{epoch}轮次中各个客户端依次对应的shapley值是{new_list}')
+
 
         #？？  i,根据训练后全局模型计算出各个梯度的贡献值，下一轮的时候着重考虑贡献值高的梯度
         #？？  ii，根据测试loss进行各个梯度的贡献值，立刻调整全局模型的梯度后进行训练及测试
         # ii
-        #更新全局模型
-        server_optimizer = optim.SGD(global_model.parameters(), lr=lr)
-        global_model=shapley_juhe(global_model,server_optimizer,local_grads,new_list)
-        
-       
+        #利用shapley值作为各个梯度之间的权重关系更新全局模型
+        global_model=shapley_juhe(global_model,server_optimizer,grads,shapley_values)
         # 训练全局模型
-        server_idx=random.sample(range(len(train_data)),1)#1个服务器
-        server_data=[train_data[i] for i in server_idx] #随机挑选数据
-        for x,y in server_data:
-            global_model,loss=server_train(global_model,loss_func,device, server_optimizer,x,y)
-            print(f'服务器在第{epoch}轮次的loss为{loss.item()}')
+        global_model,loss=server_train(global_model,loss_func,device, server_optimizer,train_loader)
+        print(f'服务器在第{epoch}轮次的loss为{loss}')
  
         #服务器发送训练后的全局模型参数
         l_model=SampleConvNet().to(device)
         l_model.load_state_dict(global_model.state_dict())
         client_models = [l_model for _ in range(num_clients)]
+
         #测试全局模型
-        loss,acc=test_model(global_model, loss_func,device, test_loader)
-        acc*=100
-        print(f'在第{epoch}轮次中server的测试损失为{loss},测试精度为{acc}%')
+        s_test_acces=test_model(global_model,device,test_loader)
+        print(f'在第{epoch}轮次中server测试精度为{s_test_acces}%')
 
 if __name__ == '__main__':
     main()
