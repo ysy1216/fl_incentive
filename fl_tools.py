@@ -1,117 +1,46 @@
-import random
-from itertools import combinations, permutations
-from sklearn.preprocessing import MinMaxScaler
 import numpy as np
+from multiprocessing import Pool, cpu_count
 import time
+a=time.time()
+def evaluate(subset):
+    return np.mean(subset)
 
-def partial_accuracy(acc_list, S):
-    """
-    计算指定组合情况下的集成模型预测精度
-    
-    Args:
-        acc_list(list): 预测结果精度列表
-        S(set): 指定组合，其中包含参与者在内的一部分元素
-        
-    Returns:
-        float: 集成模型的预测精度
-    """
-    precision = 0
-    for i in S:
-        precision += acc_list[i]
-    
-    return precision / len(S)
+def monte_carlo_shapley(num_samples, values_list, evaluate_function):
+    n = len(values_list)
+    shapley_values = np.zeros(n)
+    total_permutations = np.math.factorial(n)
 
-def compute_shapley_value(acc_list, default_weights=None):
-    """
-    计算指定精度列表的Shapley Value
-    
-    Args:
-        acc_list(list): 预测结果精度列表
-        default_weights(list): 参与者默认权重值
-    
-    Returns:
-        list: 各参与者的Shapley value
-    """
-    n = len(acc_list)
-    
-    # 如果未指定权重值，则使用默认值1/n
-    if default_weights is None:
-        default_weights = [1/n] * n
-        
-    shapley_values = [0]*n
-    
-    for i in range(n):
-        p = 0  # 记录每个参与者的预计总价值
-        
-        # 枚举包含当前参与者i的子集，并计算对应的贡献值
-        for k in range(n):
-            for random_subset in combinations(set(range(n)) - {k}, k):
-                if i in random_subset:
-                    precision_with_i = partial_accuracy(acc_list, random_subset + (i,))
-                    precision_without_i = partial_accuracy(acc_list, random_subset)
-                    delta = precision_with_i - precision_without_i
-                    p += delta
-                    
-        phi = p / ((n-1)*2**(n-2))
-        
-        # 根据Shapley value定义计算当前参与者的Shapley value
-        shapley_values[i] = sum([choose(len(random_subset), k) *
-                                 (p - phi) for k in range(len(random_subset)+1)])
-        
+    for _ in range(num_samples):
+        permuted_indices = np.random.permutation(n)
+        subset_value = 0
+        for i in range(n):
+            new_subset_value = evaluate_function(values_list[permuted_indices[:i + 1]])
+            marginal_contribution = new_subset_value - subset_value
+            shapley_values[permuted_indices[i]] += marginal_contribution
+            subset_value = new_subset_value
+
+    shapley_values /= num_samples
     return shapley_values
 
-def choose(n, k):
-    """
-    计算组合数C(n,k)
-    
-    Args:
-        n(int): 组合总数
-        k(int): 每组数字的个数
-    
-    Returns:
-        int: 组合数结果
-    """
-    if k > n or n < 0 or k < 0:
-        return 0
-    elif k == 0 or k == n:
-        return 1
+def parallel_monte_carlo_shapley(num_samples, values_list, evaluate_function):
+    with Pool(cpu_count()) as p:
+        samples_per_process = num_samples // cpu_count()
+        args = [(samples_per_process, values_list, evaluate_function) for _ in range(cpu_count())]
+        results = p.starmap(monte_carlo_shapley, args)
 
-    numerator = 1
-    denominator = 1
-    for i in range(1, min(k, n-k)+1):
-        numerator *= n+1-i
-        denominator *= i
+    #  计算每个元素对应的Shapley值列表
+    shapley_values = np.mean(results, axis=0)
+    shapley_values_list = shapley_values.tolist()
+    return shapley_values_list
 
-    return numerator // denominator
+num_samples = 5000
+# values_list = np.random.randint(0, 101, 6) 
+# # print(values_list)
+# # values_list=np.array(values_list)
+# shapley_values = parallel_monte_carlo_shapley(num_samples, values_list, evaluate)
+# # 输出每个元素的Shapley值
 
-
-# 测试用例
-
-
-# 当出现负值的shapley值，我们认定该值是无效客户端或者恶意客户端表现出的来性能，我们直接设为0
-# shapley_values=np.array(shapley_values)
-# shapley_values[shapley_values<=0]=0
-# shapley_values/=shapley_values.sum()
-# shapley_values=list(shapley_values)
 # print(shapley_values)
-a=time.time()
-# 测试用例
-lst = [0.9, 0.85, 0.75, 0.7, 0.6,9]
-shapley_values = compute_shapley_value(lst)
-print(shapley_values)
-print('time6',time.time()-a)
 
-a=time.time()
-# 测试用例
-lst = [0.9, 0.85, 0.75, 0.7, 0.6,1,2,3,6]
-shapley_values = compute_shapley_value(lst)
-print(shapley_values)
-print('time9',time.time()-a)
-
-a=time.time()
-# 测试用例
-lst = [0.9, 0.85, 0.75, 0.7, 0.6,1,2,3,6,0.85, 0.75, 0.7,0.9, 0.85, 0.75, 0.7, 0.6,1,2,3,6,0.85, 0.75, 0.7]
-shapley_values = compute_shapley_value(lst)
-print(shapley_values)
-print('time12',time.time()-a)
+ 
 

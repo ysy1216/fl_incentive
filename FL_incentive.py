@@ -61,6 +61,7 @@ def get_data_loaders():
 
 # 训练客户端
 def client_train(local_model,loss_func,device,optimizer, train_loader):
+    local_model=nn.DataParallel(local_model)
     local_model.train()
     for i,(x,y) in enumerate(train_loader):
         x=x.to(device)
@@ -74,6 +75,7 @@ def client_train(local_model,loss_func,device,optimizer, train_loader):
 
 # 训练服务端  
 def server_train(model,loss_func,device,optimizer, data_loader):
+    model=nn.DataParallel(model)
     model.train()
     for i,(x,y) in enumerate(data_loader):
         x=x.to(device)
@@ -104,6 +106,7 @@ def test_model(model,device,test_loader):
 
 
 
+
 #clients_gradients是一个元素大小为10的列表，每一个元素包含一个OrderedDict。
 #举例：        print(local_gradients[0])
     # OrderedDict([('conv1.weight',tensor([[[[ 6.4584e-02,...,]]]], device='cuda:3')),
@@ -119,25 +122,31 @@ def test_model(model,device,test_loader):
 #输出的layers_list的格式为8*10 表示8层中10个客户端的梯度 剥离出8*len(client_gradindts)的大小列表
 
 
-# from fl_shapley import compute_shapley_value
-# def compute_shapley_value(lst, weights=None):
-#     n = len(lst)
-#     if weights is None:
-#         weights = np.ones(n)
-#     else:
-#         weights = np.array(weights)
-
-#     shapley_values = np.zeros(n)
-#     for i in range(n):
-#         for j in range(1, n+1):
-#             for combination in itertools.combinations(range(n), j):
-#                 if i in combination:
-#                     weight_sum = np.sum(weights[list(combination)])
-#                     marginal_contribution = np.sum(np.array([lst[k][1] for k in combination])) / weight_sum
-#                     shapley_values[i] += marginal_contribution * math.factorial(n - len(combination)) * math.factorial(len(combination) - 1)
-
-#     result = [[lst[i][0], shapley_values[i] / math.factorial(n)] for i in range(n)]
-#     return result  #返回客户端id对应的shapley值
+def generate_grads_with_privacy(grads, num_selected, clip_norm, epsilon,device):
+    # 将梯度列表转换为张量形式
+    grads_tensor = [torch.stack(g) for g in zip(*grads)]
+    
+    # 加入拉普拉斯噪声
+    noise_scale = clip_norm / epsilon  # 噪声缩放因子
+    
+    noisy_grads_tensor = []
+    for g in grads_tensor:
+        laplace_noise = torch.tensor(np.random.laplace(0, noise_scale, g.shape)).to(device=device)
+        noisy_grads_tensor.append(g + laplace_noise)
+    
+    # 随机挑选并裁剪梯度
+    selected_indices = np.random.choice(len(grads_tensor), num_selected, replace=False)
+    clipped_grads_tensor = [torch.clamp(noisy_grads_tensor[i], -clip_norm, clip_norm) for i in selected_indices]
+    
+    # 替换原有被挑选出来的梯度
+ 
+    new_grads_tensor = [g.clone() for g in grads_tensor]
+    for i, g in enumerate(clipped_grads_tensor):
+        new_grads_tensor[selected_indices[i]] = g
+    
+    # 组装返回新的梯度列表
+    new_grads = [[param.clone().detach() for param in model] for model in zip(*new_grads_tensor)]
+    return new_grads
 
 
 def shapley_juhe(global_model,optimizer,local_grads,shapley_weights):  #全局模型，各个客户端的梯度，shapley权重值
@@ -155,15 +164,15 @@ def shapley_juhe(global_model,optimizer,local_grads,shapley_weights):  #全局�
 
 
 def main():
-    alpha = 1/100        # 梯度裁剪比例
-    epsilon = 1.5        # 隐私预算
-    lr=0.1
-    epoches=40
-    num_clients=100
+    # alpha = 1/100        # 梯度裁剪比例
+    # epsilon = 1.5        # 隐私预算
+    lr=0.18
+    epoches=200
+    num_clients=60000
     # cur_c_num=10000
     # privacy_engine = opacus.PrivacyEngine()
     loss_func=nn.CrossEntropyLoss()
-    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     global_model = SampleConvNet().to(device)
     server_optimizer = optim.SGD(global_model.parameters(), lr=lr)
     client_models = [SampleConvNet().to(device) for _ in range(num_clients)]
@@ -185,13 +194,8 @@ def main():
             grads.append([param.grad.clone() for param in model.parameters()])
 
         #梯度处理，加入拉普拉斯噪声并随机梯度裁剪
-        # indices = random.sample(range(len(grads)), 10000)
-        # privacy_engine.make_private([grads[i] for i in indices], alpha, target_epsilon=epsilon)
-        # # print('privacy:',本轮所有客户端加入的噪声量是多少，对应的隐私预算是多少??
-        # clipped_grads = [grads[i].mul(alpha) for i, alpha in zip(indices, alpha)]
-        # #将裁剪梯度完的1万个梯度与原来6万个梯度对应合并成新的梯度列表
-        # grads=...新的梯度列表
-
+        grads=generate_grads_with_privacy(grads, num_selected=10000, clip_norm=1.0/100.0, epsilon=1.5,device=device)
+        
         #测试客户端
         acces=[]
         for id in range(num_clients):
@@ -201,7 +205,8 @@ def main():
         #求shapley值
         #保留测试的mse值 进行shapley计算 ，但越高的mse贡献越大，所以采用acc
         #基于mse的shapley值计算//基于acc的shpaley值计算
-        shapley_values=compute_shapley_value(acces)
+        acces=np.array(acces)
+        shapley_values=parallel_monte_carlo_shapley(num_samples, acces, evaluate)
         #当出现负值的shapley值，我们认定该值是无效客户端或者恶意客户端表现出的来性能，我们直接设为0
         shapley_values=np.array(shapley_values)
         shapley_values[shapley_values<=0]=0
@@ -213,8 +218,10 @@ def main():
         #？？  i,根据训练后全局模型计算出各个梯度的贡献值，下一轮的时候着重考虑贡献值高的梯度
         #？？  ii，根据测试loss进行各个梯度的贡献值，立刻调整全局模型的梯度后进行训练及测试
         # ii
+        print('开始聚合')
         #利用shapley值作为各个梯度之间的权重关系更新全局模型
         global_model=shapley_juhe(global_model,server_optimizer,grads,shapley_values)
+        print('聚合完成')
         # 训练全局模型
         global_model,loss=server_train(global_model,loss_func,device, server_optimizer,train_loader)
         print(f'服务器在第{epoch}轮次的loss为{loss}')
