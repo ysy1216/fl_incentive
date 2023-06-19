@@ -54,8 +54,8 @@ def get_data_loaders():
     train_data = datasets.MNIST('./data', train=True, download=True, transform=transform)
     test_data = datasets.MNIST('./data', train=False, transform=transform)
 
-    train_loader = DataLoader(train_data, batch_size=64, shuffle=True) #6w/b
-    test_loader = DataLoader(test_data, batch_size=1000, shuffle=False) #1w/b
+    train_loader = DataLoader(train_data, batch_size=2000, shuffle=True) #6w/b
+    test_loader = DataLoader(test_data, batch_size=10000, shuffle=False) #1w/b
 
     return train_loader, test_loader
 
