@@ -186,7 +186,7 @@ def main():
     每个轮次，60000个客户端训练,针对60000个模型的梯度加入拉普拉斯噪声，随机挑选10000梯度裁剪，裁剪比例是1/100，测试各个6万个模型的acc，针对acc列表进行shapley值，对应聚合全局模型，训练全局模型并测试。
     '''
     for epoch in range(epoches):
-        print(f"Round {epoch + 1}/{epoches}")
+        print(f"Round {epoch}/{epoches}")
         #训练客户端
         grads = []  #记录所有客户端的总梯度用于加噪裁剪和计算对应shapley值
         for id in range(num_clients):
