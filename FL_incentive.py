@@ -55,7 +55,7 @@ def get_data_loaders():
     test_data = datasets.MNIST('./data', train=False, transform=transform)
 
     train_loader = DataLoader(train_data, batch_size=2000, shuffle=True) #6w/b
-    test_loader = DataLoader(test_data, batch_size=10000, shuffle=False) #1w/b
+    test_loader = DataLoader(test_data, batch_size=2000, shuffle=False) #1w/b
 
     return train_loader, test_loader
 
@@ -124,31 +124,38 @@ def test_model(model,device,test_loader):
 #输出的layers_list的格式为8*10 表示8层中10个客户端的梯度 剥离出8*len(client_gradindts)的大小列表
 
 
-def generate_grads_with_privacy(grads, num_selected, clip_norm, epsilon,device):
+def generate_grads_with_privacy(grads, num_selected, clip_norm, epsilon, device):
     # 将梯度列表转换为张量形式
     grads_tensor = [torch.stack(g) for g in zip(*grads)]
     
     # 加入拉普拉斯噪声
     noise_scale = clip_norm / epsilon  # 噪声缩放因子
-    
     noisy_grads_tensor = []
     for g in grads_tensor:
         laplace_noise = torch.tensor(np.random.laplace(0, noise_scale, g.shape)).to(device=device)
         noisy_grads_tensor.append(g + laplace_noise)
     
-    # 随机挑选并裁剪梯度
-    selected_indices = np.random.choice(len(grads_tensor), num_selected, replace=False)
-    clipped_grads_tensor = [torch.clamp(noisy_grads_tensor[i], -clip_norm, clip_norm) for i in selected_indices]
+    # 随机挑选客户端
     
-    # 替换原有被挑选出来的梯度
- 
+    selected_indices = np.random.choice(len(grads), num_selected, replace=False)
+    
+    # 裁剪所选客户端的梯度
+    clipped_grads_tensor = []
+    for i in selected_indices:
+        client_grads_tensor = [noisy_grads_tensor[j][i] for j in range(len(grads_tensor))]
+        clipped_client_grads_tensor = [torch.clamp(g, -clip_norm, clip_norm) for g in client_grads_tensor]
+        clipped_grads_tensor.append(clipped_client_grads_tensor)
+    
+    # 将裁剪后的梯度替换回原梯度
     new_grads_tensor = [g.clone() for g in grads_tensor]
-    for i, g in enumerate(clipped_grads_tensor):
-        new_grads_tensor[selected_indices[i]] = g
+    for i, idx in enumerate(selected_indices):
+        for j, g in enumerate(clipped_grads_tensor[i]):
+            new_grads_tensor[j][idx] = g
     
-    # 组装返回新的梯度列表
+    # 将张量形式的梯度列表转换为普通梯度列表
     new_grads = [[param.clone().detach() for param in model] for model in zip(*new_grads_tensor)]
     return new_grads
+
 
 
 def shapley_juhe(global_model,optimizer,local_grads,shapley_weights):  #全局模型，各个客户端的梯度，shapley权重值
@@ -194,7 +201,6 @@ def main():
             print(f'第{epoch}轮次中第{id}个客户端在该轮次的train_loss为{loss},花费{time1}秒')
             #收集本轮次中该客户端的本地梯度
             grads.append([param.grad.clone() for param in model.parameters()])
-
         #梯度处理，加入拉普拉斯噪声并随机梯度裁剪
         print('开始梯度加噪并裁剪处理')
         grads=generate_grads_with_privacy(grads, num_selected=200, clip_norm=1.0/100.0, epsilon=1.5,device=device)
