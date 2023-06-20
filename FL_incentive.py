@@ -77,7 +77,7 @@ def client_train(local_model,loss_func,device,optimizer, train_loader):
 
 # 训练服务端  
 def server_train(model,loss_func,device,optimizer, data_loader):
-    model=nn.DataParallel(model)
+    # model=nn.DataParallel(model)
     model.train()
     for i,(x,y) in enumerate(data_loader):
         x=x.to(device)
@@ -168,9 +168,9 @@ def shapley_juhe(global_model,optimizer,local_grads,shapley_weights):  #全局�
 def main():
     # alpha = 1/100        # 梯度裁剪比例
     # epsilon = 1.5        # 隐私预算
-    lr=0.3
+    lr=0.1
     epoches=50
-    num_clients=6
+    num_clients=1000
     # cur_c_num=10000
     # privacy_engine = opacus.PrivacyEngine()
     loss_func=nn.CrossEntropyLoss()
@@ -196,8 +196,9 @@ def main():
             grads.append([param.grad.clone() for param in model.parameters()])
 
         #梯度处理，加入拉普拉斯噪声并随机梯度裁剪
-        grads=generate_grads_with_privacy(grads, num_selected=1, clip_norm=1.0/100.0, epsilon=1.5,device=device)
-        
+        print('开始梯度加噪并裁剪处理')
+        grads=generate_grads_with_privacy(grads, num_selected=200, clip_norm=1.0/100.0, epsilon=1.5,device=device)
+        print('开始测试客户端')
         #测试客户端
         acces=[]
         for id in range(num_clients):
