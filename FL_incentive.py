@@ -54,13 +54,14 @@ def get_data_loaders():
     train_data = datasets.MNIST('./data', train=True, download=True, transform=transform)
     test_data = datasets.MNIST('./data', train=False, transform=transform)
 
-    train_loader = DataLoader(train_data, batch_size=10000, shuffle=True) #6w/b
+    train_loader = DataLoader(train_data, batch_size=2000, shuffle=True) #6w/b
     test_loader = DataLoader(test_data, batch_size=10000, shuffle=False) #1w/b
 
     return train_loader, test_loader
 
 # 训练客户端
 def client_train(local_model,loss_func,device,optimizer, train_loader):
+    start=time.time()
     local_model=nn.DataParallel(local_model)
     local_model.train()
     for i,(x,y) in enumerate(train_loader):
@@ -70,7 +71,8 @@ def client_train(local_model,loss_func,device,optimizer, train_loader):
         loss = loss_func(local_model(x), y)
         loss.backward()
         optimizer.step()
-    return local_model,loss
+    time1=time.time()-start
+    return time1,local_model,loss
 
 
 # 训练服务端  
@@ -166,9 +168,9 @@ def shapley_juhe(global_model,optimizer,local_grads,shapley_weights):  #全局�
 def main():
     # alpha = 1/100        # 梯度裁剪比例
     # epsilon = 1.5        # 隐私预算
-    lr=0.18
-    epoches=200
-    num_clients=60000
+    lr=0.3
+    epoches=50
+    num_clients=6
     # cur_c_num=10000
     # privacy_engine = opacus.PrivacyEngine()
     loss_func=nn.CrossEntropyLoss()
@@ -188,13 +190,13 @@ def main():
         #训练客户端
         grads = []  #记录所有客户端的总梯度用于加噪裁剪和计算对应shapley值
         for id in range(num_clients):
-            model,loss=client_train(client_models[id],loss_func,device, client_optimizers[id], train_loader) #第id个本地模型训练后的模型和损失
-            print(f'第{epoch}轮次中第{id}个客户端在该轮次的train_loss为{loss}')
+            time1,model,loss=client_train(client_models[id],loss_func,device, client_optimizers[id], train_loader) #第id个本地模型训练后的模型和损失
+            print(f'第{epoch}轮次中第{id}个客户端在该轮次的train_loss为{loss},花费{time1}秒')
             #收集本轮次中该客户端的本地梯度
             grads.append([param.grad.clone() for param in model.parameters()])
 
         #梯度处理，加入拉普拉斯噪声并随机梯度裁剪
-        grads=generate_grads_with_privacy(grads, num_selected=10000, clip_norm=1.0/100.0, epsilon=1.5,device=device)
+        grads=generate_grads_with_privacy(grads, num_selected=1, clip_norm=1.0/100.0, epsilon=1.5,device=device)
         
         #测试客户端
         acces=[]
@@ -221,14 +223,21 @@ def main():
         print('开始聚合')
         #利用shapley值作为各个梯度之间的权重关系更新全局模型
         global_model=shapley_juhe(global_model,server_optimizer,grads,shapley_values)
-        print('聚合完成')
+        print('聚合完成,开始全局模型更新')
         # 训练全局模型
         global_model,loss=server_train(global_model,loss_func,device, server_optimizer,train_loader)
         print(f'服务器在第{epoch}轮次的loss为{loss}')
  
-        #服务器发送训练后的全局模型参数
-        l_model=SampleConvNet().to(device)
-        l_model.load_state_dict(global_model.state_dict())
+        # #服务器发送训练后的全局模型参数
+        # l_model=SampleConvNet().to(device)
+        # l_model.load_state_dict(global_model.state_dict())
+        # client_models = [l_model for _ in range(num_clients)]
+        #若采用分布式训练，修改模型
+        l_model = SampleConvNet().to(device)
+        global_model_state_dict = global_model.state_dict()
+        if 'module.' in list(global_model_state_dict.keys())[0]: # 如果模型参数中包含 "module." 前缀的名称空间
+            global_model_state_dict = {k.replace('module.', ''): v for k, v in global_model_state_dict.items()}
+        l_model.load_state_dict(global_model_state_dict)
         client_models = [l_model for _ in range(num_clients)]
 
         #测试全局模型
