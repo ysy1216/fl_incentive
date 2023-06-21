@@ -161,8 +161,7 @@ def generate_grads_with_privacy(grads, num_selected, clip_norm, epsilon, device)
 def shapley_juhe(global_model, optimizer, local_grads, shapley_weights):
     print(f'聚合比列表sapley_weights:{shapley_weights}')
     # 计算加权平均梯度
-    local_grads=local_grads.to(device='cpu')
-    mean_grads = np.mean([np.array(grad) * weight for grad, weight in zip(local_grads, shapley_weights)], axis=0)
+    mean_grads = np.mean([np.array(grad.cpu().numpy()) * weight for grad, weight in zip(local_grads, shapley_weights)], axis=0)
 
     # 更新全局模型
     for param, grad in zip(global_model.parameters(), mean_grads):
@@ -176,7 +175,7 @@ def shapley_juhe(global_model, optimizer, local_grads, shapley_weights):
 def main():
     # alpha = 1/100        # 梯度裁剪比例
     # epsilon = 1.5        # 隐私预算
-    lr=0.3121
+    lr=0.1
     epoches=10
     num_clients=2
     # cur_c_num=10000
