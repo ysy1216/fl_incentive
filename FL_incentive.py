@@ -54,8 +54,8 @@ def get_data_loaders():
     train_data = datasets.MNIST('./data', train=True, download=True, transform=transform)
     test_data = datasets.MNIST('./data', train=False, transform=transform)
 
-    train_loader = DataLoader(train_data, batch_size=2000, shuffle=True) #6w/b
-    test_loader = DataLoader(test_data, batch_size=2000, shuffle=False) #1w/b
+    train_loader = DataLoader(train_data, batch_size=3000, shuffle=True) #6w/b
+    test_loader = DataLoader(test_data, batch_size=200, shuffle=False) #1w/b
 
     return train_loader, test_loader
 
@@ -127,7 +127,7 @@ def test_model(model,device,test_loader):
 def generate_grads_with_privacy(grads, num_selected, clip_norm, epsilon, device):
     # 将梯度列表转换为张量形式
     grads_tensor = [torch.stack(g) for g in zip(*grads)]
-    
+
     # 加入拉普拉斯噪声
     noise_scale = clip_norm / epsilon  # 噪声缩放因子
     noisy_grads_tensor = []
@@ -158,26 +158,27 @@ def generate_grads_with_privacy(grads, num_selected, clip_norm, epsilon, device)
 
 
 
-def shapley_juhe(global_model,optimizer,local_grads,shapley_weights):  #全局模型，各个客户端的梯度，shapley权重值
-    #根据shapley值来更新全局模型
+def shapley_juhe(global_model, optimizer, local_grads, shapley_weights):
     print(f'聚合比列表sapley_weights:{shapley_weights}')
-    for i, params in enumerate(global_model.parameters()):
-        if params.grad is None:
-            continue
-        global_grad = torch.zeros_like(params.grad)            
-        for j in range(len(shapley_weights)):
-            global_grad += local_grads[j][i] * shapley_weights[j]
-        params.grad = global_grad
-    optimizer.step()   
+    # 计算加权平均梯度
+    local_grads=local_grads.to(device='cpu')
+    mean_grads = np.mean([np.array(grad) * weight for grad, weight in zip(local_grads, shapley_weights)], axis=0)
+
+    # 更新全局模型
+    for param, grad in zip(global_model.parameters(), mean_grads):
+        if grad is not None:
+            param.grad = torch.from_numpy(grad).to(device=param.device)
+    optimizer.step()
+    global_model.zero_grad()
     return global_model
 
 
 def main():
     # alpha = 1/100        # 梯度裁剪比例
     # epsilon = 1.5        # 隐私预算
-    lr=0.1
-    epoches=50
-    num_clients=1000
+    lr=0.3121
+    epoches=10
+    num_clients=2
     # cur_c_num=10000
     # privacy_engine = opacus.PrivacyEngine()
     loss_func=nn.CrossEntropyLoss()
@@ -203,7 +204,7 @@ def main():
             grads.append([param.grad.clone() for param in model.parameters()])
         #梯度处理，加入拉普拉斯噪声并随机梯度裁剪
         print('开始梯度加噪并裁剪处理')
-        grads=generate_grads_with_privacy(grads, num_selected=200, clip_norm=1.0/100.0, epsilon=1.5,device=device)
+        grads=generate_grads_with_privacy(grads, num_selected=1, clip_norm=1.0/100.0, epsilon=1.5,device=device)
         print('开始测试客户端')
         #测试客户端
         acces=[]
