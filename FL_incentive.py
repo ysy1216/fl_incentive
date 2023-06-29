@@ -54,15 +54,15 @@ def get_data_loaders():
     train_data = datasets.MNIST('./data', train=True, download=True, transform=transform)
     test_data = datasets.MNIST('./data', train=False, transform=transform)
 
-    train_loader = DataLoader(train_data, batch_size=3000, shuffle=True) #6w/b
-    test_loader = DataLoader(test_data, batch_size=200, shuffle=False) #1w/b
+    train_loader = DataLoader(train_data, batch_size=1000, shuffle=True) #6w/b
+    server_train_loader = DataLoader(train_data, batch_size=64, shuffle=True) #6w/b
+    test_loader = DataLoader(test_data, batch_size=64, shuffle=False) #1w/b
 
-    return train_loader, test_loader
+    return server_train_loader,train_loader, test_loader
 
 # 训练客户端
 def client_train(local_model,loss_func,device,optimizer, train_loader):
     start=time.time()
-    local_model=nn.DataParallel(local_model)
     local_model.train()
     for i,(x,y) in enumerate(train_loader):
         x=x.to(device)
@@ -128,56 +128,71 @@ def generate_grads_with_privacy(grads, num_selected, clip_norm, epsilon, device)
     # 将梯度列表转换为张量形式
     grads_tensor = [torch.stack(g) for g in zip(*grads)]
 
-    # 加入拉普拉斯噪声
-    noise_scale = clip_norm / epsilon  # 噪声缩放因子
-    noisy_grads_tensor = []
-    for g in grads_tensor:
-        laplace_noise = torch.tensor(np.random.laplace(0, noise_scale, g.shape)).to(device=device)
-        noisy_grads_tensor.append(g + laplace_noise)
-    
     # 随机挑选客户端
-    
     selected_indices = np.random.choice(len(grads), num_selected, replace=False)
-    
+
     # 裁剪所选客户端的梯度
     clipped_grads_tensor = []
     for i in selected_indices:
-        client_grads_tensor = [noisy_grads_tensor[j][i] for j in range(len(grads_tensor))]
+        client_grads_tensor = [grads_tensor[j][i] for j in range(len(grads_tensor))]
         clipped_client_grads_tensor = [torch.clamp(g, -clip_norm, clip_norm) for g in client_grads_tensor]
         clipped_grads_tensor.append(clipped_client_grads_tensor)
-    
-    # 将裁剪后的梯度替换回原梯度
+
+    # 加入拉普拉斯噪声
+    noise_scale = clip_norm / epsilon  # 噪声缩放因子
+    noisy_grads_tensor = []
+    for client_grads in clipped_grads_tensor:
+        noisy_client_grads = []
+        for g in client_grads:
+            laplace_noise = torch.tensor(np.random.laplace(0, noise_scale, g.shape)).to(device=device)
+            noisy_g = g + laplace_noise
+            noisy_client_grads.append(noisy_g)
+        noisy_grads_tensor.append(noisy_client_grads)
+
+    # 将裁剪且加入噪声的梯度替换回原梯度
     new_grads_tensor = [g.clone() for g in grads_tensor]
     for i, idx in enumerate(selected_indices):
-        for j, g in enumerate(clipped_grads_tensor[i]):
+        for j, g in enumerate(noisy_grads_tensor[i]):
             new_grads_tensor[j][idx] = g
-    
+
     # 将张量形式的梯度列表转换为普通梯度列表
     new_grads = [[param.clone().detach() for param in model] for model in zip(*new_grads_tensor)]
     return new_grads
 
 
-
-def shapley_juhe(global_model, optimizer, local_grads, shapley_weights):
-    print(f'聚合比列表sapley_weights:{shapley_weights}')
-    # 计算加权平均梯度
-    mean_grads = np.mean([np.array(grad.cpu().numpy()) * weight for grad, weight in zip(local_grads, shapley_weights)], axis=0)
-
-    # 更新全局模型
-    for param, grad in zip(global_model.parameters(), mean_grads):
-        if grad is not None:
-            param.grad = torch.from_numpy(grad).to(device=param.device)
-    optimizer.step()
+def shapley_juhe(global_model, optimizer,shuffle__list):
+    # print(f'聚合比列表sapley_weights: {shapley_weights}')
+    local_grads, shapley_weights=[],[]
+    for pair in shuffle__list:
+        local_grads.append(pair[0])
+        shapley_weights.append(pair[1])
+    print(f'聚合比列表sapley_weights: {shapley_weights}')
+    # 遍历全局模型的参数
+    for i, params in enumerate(global_model.parameters()):
+        if params.grad is None:
+            continue
+        
+        # 初始化全局梯度为零
+        global_grad = torch.zeros_like(params.grad)
+        
+        # 根据 Shapley 权重计算加权平均梯度
+        for j in range(len(shapley_weights)):
+            global_grad += local_grads[j][i] * shapley_weights[j]
+        
+        # 更新全局模型参数的梯度
+        params.grad = global_grad
+    
+    # 使用优化器执行梯度下降更新
+    optimizer.step()   
     global_model.zero_grad()
     return global_model
-
 
 def main():
     # alpha = 1/100        # 梯度裁剪比例
     # epsilon = 1.5        # 隐私预算
     lr=0.1
     epoches=10
-    num_clients=2
+    num_clients=500
     # cur_c_num=10000
     # privacy_engine = opacus.PrivacyEngine()
     loss_func=nn.CrossEntropyLoss()
@@ -186,7 +201,7 @@ def main():
     server_optimizer = optim.SGD(global_model.parameters(), lr=lr)
     client_models = [SampleConvNet().to(device) for _ in range(num_clients)]
     client_optimizers = [optim.SGD(model.parameters(), lr=lr) for model in client_models]
-    train_loader, test_loader= get_data_loaders()
+    server_train_loader,train_loader, test_loader= get_data_loaders()
 
     #开始训练
     '''
@@ -203,7 +218,8 @@ def main():
             grads.append([param.grad.clone() for param in model.parameters()])
         #梯度处理，加入拉普拉斯噪声并随机梯度裁剪
         print('开始梯度加噪并裁剪处理')
-        grads=generate_grads_with_privacy(grads, num_selected=1, clip_norm=1.0/100.0, epsilon=1.5,device=device)
+        grads=generate_grads_with_privacy(grads, num_selected=80, clip_norm=1.0/100.0, epsilon=1.5,device=device)
+
         print('开始测试客户端')
         #测试客户端
         acces=[]
@@ -223,16 +239,19 @@ def main():
         shapley_values=list(shapley_values)
         # print(shapley_values)
 
-
+        
         #？？  i,根据训练后全局模型计算出各个梯度的贡献值，下一轮的时候着重考虑贡献值高的梯度
         #？？  ii，根据测试loss进行各个梯度的贡献值，立刻调整全局模型的梯度后进行训练及测试
         # ii
+        #随机打乱
+        shuffle__list = [[x, y] for x, y in zip(grads, shapley_values)]
+        random.shuffle(shuffle__list)
         print('开始聚合')
         #利用shapley值作为各个梯度之间的权重关系更新全局模型
-        global_model=shapley_juhe(global_model,server_optimizer,grads,shapley_values)
+        global_model=shapley_juhe(global_model,server_optimizer,shuffle__list)
         print('聚合完成,开始全局模型更新')
         # 训练全局模型
-        global_model,loss=server_train(global_model,loss_func,device, server_optimizer,train_loader)
+        global_model,loss=server_train(global_model,loss_func,device, server_optimizer,server_train_loader)
         print(f'服务器在第{epoch}轮次的loss为{loss}')
  
         # #服务器发送训练后的全局模型参数
@@ -240,13 +259,15 @@ def main():
         # l_model.load_state_dict(global_model.state_dict())
         # client_models = [l_model for _ in range(num_clients)]
         #若采用分布式训练，修改模型
-        l_model = SampleConvNet().to(device)
-        global_model_state_dict = global_model.state_dict()
-        if 'module.' in list(global_model_state_dict.keys())[0]: # 如果模型参数中包含 "module." 前缀的名称空间
-            global_model_state_dict = {k.replace('module.', ''): v for k, v in global_model_state_dict.items()}
-        l_model.load_state_dict(global_model_state_dict)
-        client_models = [l_model for _ in range(num_clients)]
 
+        torch.save(global_model.state_dict(), 'global_model_params.pth')
+        l_model = SampleConvNet().to(device)  
+        # 加载全局模型参数
+        global_model_params = torch.load('global_model_params.pth')
+        l_model.load_state_dict(global_model_params)
+        # if 'module.' in list(global_model_state_dict.keys())[0]: # 如果模型参数中包含 "module." 前缀的名称空间
+        #     global_model_state_dict = {k.replace('module.', ''): v for k, v in global_model_state_dict.items()}
+        client_models = [l_model for _ in range(num_clients)]
         #测试全局模型
         s_test_acces=test_model(global_model,device,test_loader)
         print(f'在第{epoch}轮次中server测试精度为{s_test_acces}%')
