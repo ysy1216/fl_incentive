@@ -160,39 +160,31 @@ def generate_grads_with_privacy(grads, num_selected, clip_norm, epsilon, device)
     return new_grads
 
 
-def shapley_juhe(global_model, optimizer,shuffle__list):
-    # print(f'聚合比列表sapley_weights: {shapley_weights}')
-    local_grads, shapley_weights=[],[]
-    for pair in shuffle__list:
-        local_grads.append(pair[0])
-        shapley_weights.append(pair[1])
-    print(f'聚合比列表sapley_weights: {shapley_weights}')
+def shapley_juhe(global_model, optimizer, shuffle_list):
     # 遍历全局模型的参数
     for i, params in enumerate(global_model.parameters()):
         if params.grad is None:
             continue
-        
         # 初始化全局梯度为零
         global_grad = torch.zeros_like(params.grad)
-        
         # 根据 Shapley 权重计算加权平均梯度
-        for j in range(len(shapley_weights)):
-            global_grad += local_grads[j][i] * shapley_weights[j]
-        
+        for j, pair in enumerate(shuffle_list):
+            local_grad, shapley_weight = pair
+            global_grad += local_grad[i] * shapley_weight
         # 更新全局模型参数的梯度
         params.grad = global_grad
-    
     # 使用优化器执行梯度下降更新
-    optimizer.step()   
+    optimizer.step()
     global_model.zero_grad()
     return global_model
+
 
 def main():
     # alpha = 1/100        # 梯度裁剪比例
     # epsilon = 1.5        # 隐私预算
-    lr=0.1
-    epoches=10
-    num_clients=500
+    lr=0.01
+    epoches=20
+    num_clients=60000
     # cur_c_num=10000
     # privacy_engine = opacus.PrivacyEngine()
     loss_func=nn.CrossEntropyLoss()
@@ -218,7 +210,7 @@ def main():
             grads.append([param.grad.clone() for param in model.parameters()])
         #梯度处理，加入拉普拉斯噪声并随机梯度裁剪
         print('开始梯度加噪并裁剪处理')
-        grads=generate_grads_with_privacy(grads, num_selected=80, clip_norm=1.0/100.0, epsilon=1.5,device=device)
+        grads=generate_grads_with_privacy(grads, num_selected=10000, clip_norm=1.0/100.0, epsilon=1.5,device=device)
 
         print('开始测试客户端')
         #测试客户端
