@@ -182,8 +182,8 @@ def shapley_juhe(global_model, optimizer, shuffle_list):
 def main():
     # alpha = 1/100        # 梯度裁剪比例
     # epsilon = 1.5        # 隐私预算
-    lr=0.01
-    epoches=20
+    lr=0.1
+    epoches=1
     num_clients=60000
     # cur_c_num=10000
     # privacy_engine = opacus.PrivacyEngine()
@@ -231,10 +231,6 @@ def main():
         shapley_values=list(shapley_values)
         # print(shapley_values)
 
-        
-        #？？  i,根据训练后全局模型计算出各个梯度的贡献值，下一轮的时候着重考虑贡献值高的梯度
-        #？？  ii，根据测试loss进行各个梯度的贡献值，立刻调整全局模型的梯度后进行训练及测试
-        # ii
         #随机打乱
         shuffle__list = [[x, y] for x, y in zip(grads, shapley_values)]
         random.shuffle(shuffle__list)
@@ -245,20 +241,13 @@ def main():
         # 训练全局模型
         global_model,loss=server_train(global_model,loss_func,device, server_optimizer,server_train_loader)
         print(f'服务器在第{epoch}轮次的loss为{loss}')
- 
-        # #服务器发送训练后的全局模型参数
-        # l_model=SampleConvNet().to(device)
-        # l_model.load_state_dict(global_model.state_dict())
-        # client_models = [l_model for _ in range(num_clients)]
-        #若采用分布式训练，修改模型
 
         torch.save(global_model.state_dict(), 'global_model_params.pth')
         l_model = SampleConvNet().to(device)  
         # 加载全局模型参数
         global_model_params = torch.load('global_model_params.pth')
         l_model.load_state_dict(global_model_params)
-        # if 'module.' in list(global_model_state_dict.keys())[0]: # 如果模型参数中包含 "module." 前缀的名称空间
-        #     global_model_state_dict = {k.replace('module.', ''): v for k, v in global_model_state_dict.items()}
+
         client_models = [l_model for _ in range(num_clients)]
         #测试全局模型
         s_test_acces=test_model(global_model,device,test_loader)
