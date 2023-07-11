@@ -55,5 +55,9 @@ class SampleConvNet(nn.Module):
 
 实验包含：   数值结果/效率结果
 1，是否含有非对称加密算法 
-2，cdp/ldp所估计的梯度误差  test_acc
+2，cdp/ldp所估计的梯度误差  
 3，cdp/ldp 与 真实梯度的shapley值对比 
+
+总结：
+1，不同 隐私预算下：cdp/ldp下对应梯度与真实梯度的mse变化对比 以及 对应shapley值与真实值差值变化 
+2，给出加入加解密过程所消耗的时间

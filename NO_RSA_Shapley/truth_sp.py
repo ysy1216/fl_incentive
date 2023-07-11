@@ -7,6 +7,8 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 import random
 from fl_tools import *
+import pickle
+import os
 '''
 CLDP-SGD Model Architecture for MNIST
 Layer               Parameters
@@ -55,7 +57,6 @@ def get_data_loaders():
 
 # 训练客户端
 def client_train(local_model,loss_func,device,optimizer, train_loader):
-    start=time.time()
     local_model.train()
     for i,(x,y) in enumerate(train_loader):
         x=x.to(device)
@@ -64,8 +65,7 @@ def client_train(local_model,loss_func,device,optimizer, train_loader):
         loss = loss_func(local_model(x), y)
         loss.backward()
         optimizer.step()
-    time1=time.time()-start
-    return time1,local_model,loss
+    return local_model,loss
 
 
 # 训练服务端  
@@ -191,8 +191,6 @@ def shapley_juhe(global_model, optimizer, shuffle_list):
 
 
 def main():
-    # alpha = 1/100        # 梯度裁剪比例
-    # epsilon = 1.5        # 隐私预算
     lr=0.1
     epoches=1
     num_clients=1000
@@ -215,8 +213,8 @@ def main():
         #训练客户端
         grads = []  #记录所有客户端的总梯度 
         for id in range(num_clients):
-            time1,model,loss=client_train(client_models[id],loss_func,device, client_optimizers[id], train_loader) #第id个本地模型训练后的模型和损失
-            print(f'第{epoch}轮次中第{id}个客户端在该轮次的train_loss为{loss},花费{time1}秒')
+            model,loss=client_train(client_models[id],loss_func,device, client_optimizers[id], train_loader) #第id个本地模型训练后的模型和损失
+            print(f'第{epoch}轮次中第{id}个客户端在该轮次的train_loss为{loss}')
             #收集本轮次中该客户端的本地梯度 
             grads.append([param.grad.clone() for param in model.parameters()])
         #梯度处理，加入拉普拉斯噪声并随机梯度裁剪 裁剪比例为1/100，挑选数量比例为1/6
@@ -230,8 +228,14 @@ def main():
         gards=grads_ldp
         '''
         #3，真实梯度不处理
-        gards=gards
+        gards_true=grads
 
+        file_path = os.path.join('./result/', 'gards_true_1.pkl')  # 文件路径为 result/gards_true_1.pkl
+        # file_path = os.path.join('./result/', 'gards_true_2.pkl')  # 文件路径为 result/gards_true_2.pkl
+        # file_path = os.path.join('./result/', 'gards_true_3.pkl')  # 文件路径为 result/gards_true_3.pkl
+        # file_path = os.path.join('./result/', 'gards_true_4.pkl')  # 文件路径为 result/gards_true_4.pkl
+        with open(file_path, 'wb') as f:
+            pickle.dump(gards_true, f)
         print('开始测试客户端')
         #测试客户端
         acces=[]
@@ -249,7 +253,13 @@ def main():
         shapley_values[shapley_values<=0]=0
         shapley_values/=shapley_values.sum()
         shapley_values=list(shapley_values)
-        # print(shapley_values)
+
+        file_path = os.path.join('./result/', 'sp_true_1.pkl')  # 文件路径为 result/sp_true_1.pkl
+        # file_path = os.path.join('./result/', 'sp_true_2.pkl')  # 文件路径为 result/sp_true_2.pkl
+        # file_path = os.path.join('./result/', 'sp_true_3.pkl')  # 文件路径为 result/sp_true_3.pkl
+        # file_path = os.path.join('./result/', 'sp_true_4.pkl')  # 文件路径为 result/sp_true_4.pkl
+        with open(file_path, 'wb') as f:
+            pickle.dump(shapley_values, f)
 
         #随机打乱
         shuffle__list = [[x, y] for x, y in zip(grads, shapley_values)]
@@ -262,10 +272,10 @@ def main():
         global_model,loss=server_train(global_model,loss_func,device, server_optimizer,server_train_loader)
         print(f'服务器在第{epoch}轮次的loss为{loss}')
 
-        torch.save(global_model.state_dict(), 'global_model_params.pth')
+        torch.save(global_model.state_dict(), 'global_model_params_true.pth')
         l_model = SampleConvNet().to(device)  
         # 加载全局模型参数
-        global_model_params = torch.load('global_model_params.pth')
+        global_model_params = torch.load('global_model_params_true.pth')
         l_model.load_state_dict(global_model_params)
 
         client_models = [l_model for _ in range(num_clients)]

@@ -7,6 +7,8 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 import random
 from fl_tools import *
+import pickle
+import os
 '''
 CLDP-SGD Model Architecture for MNIST
 Layer               Parameters
@@ -192,7 +194,7 @@ def shapley_juhe(global_model, optimizer, shuffle_list):
 
 def main():
     # alpha = 1/100        # 梯度裁剪比例
-    # epsilon = 1.5        # 隐私预算
+    epsilon = 0.5        # 隐私预算
     lr=0.1
     epoches=1
     num_clients=1000
@@ -222,7 +224,7 @@ def main():
         #梯度处理，加入拉普拉斯噪声并随机梯度裁剪 裁剪比例为1/100，挑选数量比例为1/6
         #1,收集所有梯度再处理（进行中心化差分隐私机制）
         print('开始梯度加噪并裁剪处理') 
-        grads_cdp=generate_grads_with_privacy_cdp(grads, num_selected=166,clip_norm=1/100, epsilon=1.5,device=device)
+        grads_cdp=generate_grads_with_privacy_cdp(grads, num_selected=166,clip_norm=1/100, epsilon=epsilon,device=device)
         grads=grads_cdp
         '''
         grads=grads_cdp
@@ -232,6 +234,15 @@ def main():
         #3，真实梯度不处理
         gards=gards
         '''
+        file_path = os.path.join('./result/', f'gards_cdp1_{epsilon}_1.pkl')  # 文件路径为 result/gards_cdp1_{epsilon}_1.pkl
+        # file_path = os.path.join('./result/', f'gards_cdp1_{epsilon}_2.pkl')   
+        # file_path = os.path.join('./result/', f'gards_cdp1_{epsilon}_3.pkl')   
+        # file_path = os.path.join('./result/', f'gards_cdp1_{epsilon}_4.pkl')   
+        with open(file_path, 'wb') as f:
+            pickle.dump(grads, f)
+
+
+
         print('开始测试客户端')
         #测试客户端
         acces=[]
@@ -249,7 +260,14 @@ def main():
         shapley_values[shapley_values<=0]=0
         shapley_values/=shapley_values.sum()
         shapley_values=list(shapley_values)
-        # print(shapley_values)
+
+        file_path = os.path.join('./result/', f'sp_cdp1_{epsilon}_1.pkl')  # 文件路径为 result/sp_ldp1_{epsilon}_1.pkl
+        # file_path = os.path.join('./result/', f'sp_cdp1_{epsilon}_2.pkl')  
+        # file_path = os.path.join('./result/', f'sp_cdp1_{epsilon}_3.pkl')  
+        # file_path = os.path.join('./result/', f'sp_cdp1_{epsilon}_4.pkl')  
+        with open(file_path, 'wb') as f:
+            pickle.dump(shapley_values, f)
+
 
         #随机打乱
         shuffle__list = [[x, y] for x, y in zip(grads, shapley_values)]
@@ -262,10 +280,10 @@ def main():
         global_model,loss=server_train(global_model,loss_func,device, server_optimizer,server_train_loader)
         print(f'服务器在第{epoch}轮次的loss为{loss}')
 
-        torch.save(global_model.state_dict(), 'global_model_params.pth')
+        torch.save(global_model.state_dict(), 'global_model_params_cdp.pth')
         l_model = SampleConvNet().to(device)  
         # 加载全局模型参数
-        global_model_params = torch.load('global_model_params.pth')
+        global_model_params = torch.load('global_model_params_cdp.pth')
         l_model.load_state_dict(global_model_params)
 
         client_models = [l_model for _ in range(num_clients)]
