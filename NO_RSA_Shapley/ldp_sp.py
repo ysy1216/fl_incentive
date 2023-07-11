@@ -222,13 +222,13 @@ def main():
         #梯度处理，加入拉普拉斯噪声并随机梯度裁剪 裁剪比例为1/100，挑选数量比例为1/6
         #1,收集所有梯度再处理（进行中心化差分隐私机制）
         print('开始梯度加噪并裁剪处理') 
-        grads_cdp=generate_grads_with_privacy_cdp(grads, num_selected=166,clip_norm=1/100, epsilon=1.5,device=device)
-        grads=grads_cdp
+        # grads_cdp=generate_grads_with_privacy_cdp(grads, num_selected=166,clip_norm=1/100, epsilon=1.5,device=device)
+        # grads=grads_cdp
         #2,针对每一个梯度加入拉普拉斯噪声，（进行本地化差分隐私机制）
         grads_ldp=generate_grads_with_privacy_ldp(grads, num_selected=166, clip_norm=1/100, epsilon=1.5)
-        gards=grads_ldp
+        grads=grads_ldp
         #3，真实梯度不处理
-        gards=gards
+        # gards=gards
 
         print('开始测试客户端')
         #测试客户端

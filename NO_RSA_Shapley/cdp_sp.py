@@ -224,12 +224,14 @@ def main():
         print('开始梯度加噪并裁剪处理') 
         grads_cdp=generate_grads_with_privacy_cdp(grads, num_selected=166,clip_norm=1/100, epsilon=1.5,device=device)
         grads=grads_cdp
+        '''
+        grads=grads_cdp
         #2,针对每一个梯度加入拉普拉斯噪声，（进行本地化差分隐私机制）
         grads_ldp=generate_grads_with_privacy_ldp(grads, num_selected=166, clip_norm=1/100, epsilon=1.5)
         gards=grads_ldp
         #3，真实梯度不处理
         gards=gards
-
+        '''
         print('开始测试客户端')
         #测试客户端
         acces=[]
