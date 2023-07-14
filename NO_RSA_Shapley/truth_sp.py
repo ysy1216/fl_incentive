@@ -198,7 +198,7 @@ def main():
         # cur_c_num=10000
         # privacy_engine = opacus.PrivacyEngine()
         loss_func=nn.CrossEntropyLoss()
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
         global_model = SampleConvNet().to(device)
         server_optimizer = optim.SGD(global_model.parameters(), lr=lr)
         client_models = [SampleConvNet().to(device) for _ in range(num_clients)]
