@@ -49,7 +49,7 @@ def get_data_loaders():
     train_data = datasets.MNIST('./data', train=True, download=True, transform=transform)
     test_data = datasets.MNIST('./data', train=False, transform=transform)
 
-    train_loader = DataLoader(train_data, batch_size=2000, shuffle=True) #6w/b
+    train_loader = DataLoader(train_data, batch_size=64, shuffle=True) #6w/b
     server_train_loader = DataLoader(train_data, batch_size=64, shuffle=True) #6w/b
     test_loader = DataLoader(test_data, batch_size=64, shuffle=False) #1w/b
 
@@ -191,97 +191,93 @@ def shapley_juhe(global_model, optimizer, shuffle_list):
 
 
 def main():
-    lr=0.1
-    epoches=1
-    num_clients=1000
-    # cur_c_num=10000
-    # privacy_engine = opacus.PrivacyEngine()
-    loss_func=nn.CrossEntropyLoss()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    global_model = SampleConvNet().to(device)
-    server_optimizer = optim.SGD(global_model.parameters(), lr=lr)
-    client_models = [SampleConvNet().to(device) for _ in range(num_clients)]
-    client_optimizers = [optim.SGD(model.parameters(), lr=lr) for model in client_models]
-    server_train_loader,train_loader, test_loader= get_data_loaders()
+    for ci  in range(1,10):
+        lr=0.1
+        epoches=1
+        num_clients=60000
+        # cur_c_num=10000
+        # privacy_engine = opacus.PrivacyEngine()
+        loss_func=nn.CrossEntropyLoss()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        global_model = SampleConvNet().to(device)
+        server_optimizer = optim.SGD(global_model.parameters(), lr=lr)
+        client_models = [SampleConvNet().to(device) for _ in range(num_clients)]
+        client_optimizers = [optim.SGD(model.parameters(), lr=lr) for model in client_models]
+        server_train_loader,train_loader, test_loader= get_data_loaders()
 
-    #开始训练
-    '''
-    每个轮次，60000个客户端训练,针对60000个模型的梯度加入拉普拉斯噪声，随机挑选10000梯度裁剪，裁剪比例是1/100，测试各个6万个模型的acc，针对acc列表进行shapley值，对应聚合全局模型，训练全局模型并测试。
-    '''
-    for epoch in range(epoches):
-        print(f"Round {epoch}/{epoches}")
-        #训练客户端
-        grads = []  #记录所有客户端的总梯度 
-        for id in range(num_clients):
-            model,loss=client_train(client_models[id],loss_func,device, client_optimizers[id], train_loader) #第id个本地模型训练后的模型和损失
-            print(f'第{epoch}轮次中第{id}个客户端在该轮次的train_loss为{loss}')
-            #收集本轮次中该客户端的本地梯度 
-            grads.append([param.grad.clone() for param in model.parameters()])
-        #梯度处理，加入拉普拉斯噪声并随机梯度裁剪 裁剪比例为1/100，挑选数量比例为1/6
+        #开始训练
         '''
-        # 1,收集所有梯度再处理（进行中心化差分隐私机制）
-        print('开始梯度加噪并裁剪处理') 
-        grads_cdp=generate_grads_with_privacy_cdp(grads, num_selected=166,clip_norm=1/100, epsilon=1.5,device=device)
-        grads=grads_cdp
-        #2,针对每一个梯度加入拉普拉斯噪声，（进行本地化差分隐私机制）
-        grads_ldp=generate_grads_with_privacy_ldp(grads, num_selected=166, clip_norm=1/100, epsilon=1.5)
-        gards=grads_ldp
+        每个轮次，60000个客户端训练,针对60000个模型的梯度加入拉普拉斯噪声，随机挑选10000梯度裁剪，裁剪比例是1/100，测试各个6万个模型的acc，针对acc列表进行shapley值，对应聚合全局模型，训练全局模型并测试。
         '''
-        #3，真实梯度不处理
-        gards_true=grads
+        for epoch in range(epoches):
+            print(f"Round {epoch}/{epoches}")
+            #训练客户端
+            grads = []  #记录所有客户端的总梯度 
+            for id in range(num_clients):
+                model,loss=client_train(client_models[id],loss_func,device, client_optimizers[id], train_loader) #第id个本地模型训练后的模型和损失
+                print(f'第{epoch}轮次中第{id}个客户端在该轮次的train_loss为{loss}')
+                #收集本轮次中该客户端的本地梯度 
+                grads.append([param.grad.clone() for param in model.parameters()])
+            #梯度处理，加入拉普拉斯噪声并随机梯度裁剪 裁剪比例为1/100，挑选数量比例为1/6
+            '''
+            # 1,收集所有梯度再处理（进行中心化差分隐私机制）
+            print('开始梯度加噪并裁剪处理') 
+            grads_cdp=generate_grads_with_privacy_cdp(grads, num_selected=166,clip_norm=1/100, epsilon=1.5,device=device)
+            grads=grads_cdp
+            #2,针对每一个梯度加入拉普拉斯噪声，（进行本地化差分隐私机制）
+            grads_ldp=generate_grads_with_privacy_ldp(grads, num_selected=166, clip_norm=1/100, epsilon=1.5)
+            gards=grads_ldp
+            '''
+            #3，真实梯度不处理
+            gards_true=grads
 
-        file_path = os.path.join('./result/', 'gards_true_1.pkl')  # 文件路径为 result/gards_true_1.pkl
-        # file_path = os.path.join('./result/', 'gards_true_2.pkl')  # 文件路径为 result/gards_true_2.pkl
-        # file_path = os.path.join('./result/', 'gards_true_3.pkl')  # 文件路径为 result/gards_true_3.pkl
-        # file_path = os.path.join('./result/', 'gards_true_4.pkl')  # 文件路径为 result/gards_true_4.pkl
-        with open(file_path, 'wb') as f:
-            pickle.dump(gards_true, f)
-        print('开始测试客户端')
-        #测试客户端
-        acces=[]
-        for id in range(num_clients):
-            acc=test_model(client_models[id],device,test_loader)
-            acces.append(acc)
-            print(f'第{epoch}轮次中第{id}的客户端在测试集的精度为{acc}')
-        #求shapley值
-        #保留测试的mse值 进行shapley计算 ，但越高的mse贡献越大，所以采用acc
-        #基于mse的shapley值计算//基于acc的shpaley值计算
-        acces=np.array(acces)
-        shapley_values=parallel_monte_carlo_shapley(num_samples, acces, evaluate)
-        #当出现负值的shapley值，我们认定该值是无效客户端或者恶意客户端表现出的来性能，我们直接设为0
-        shapley_values=np.array(shapley_values)
-        shapley_values[shapley_values<=0]=0
-        shapley_values/=shapley_values.sum()
-        shapley_values=list(shapley_values)
+            os.makedirs('./result/', exist_ok=True)
+            file_path = os.path.join('./result/True/', f'grads_True_{ci}.pkl')  # 文件路径为 result/gards_true_1.pkl
+            with open(file_path, 'wb') as f:
+                pickle.dump(gards_true, f)
+            print('开始测试客户端')
+            #测试客户端
+            acces=[]
+            for id in range(num_clients):
+                acc=test_model(client_models[id],device,test_loader)
+                acces.append(acc)
+                print(f'第{epoch}轮次中第{id}的客户端在测试集的精度为{acc}')
+            #求shapley值
+            #保留测试的mse值 进行shapley计算 ，但越高的mse贡献越大，所以采用acc
+            #基于mse的shapley值计算//基于acc的shpaley值计算
+            acces=np.array(acces)
+            shapley_values=parallel_monte_carlo_shapley(num_samples, acces, evaluate)
+            #当出现负值的shapley值，我们认定该值是无效客户端或者恶意客户端表现出的来性能，我们直接设为0
+            shapley_values=np.array(shapley_values)
+            shapley_values[shapley_values<=0]=0
+            shapley_values/=shapley_values.sum()
+            shapley_values=list(shapley_values)
 
-        file_path = os.path.join('./result/', 'sp_true_1.pkl')  # 文件路径为 result/sp_true_1.pkl
-        # file_path = os.path.join('./result/', 'sp_true_2.pkl')  # 文件路径为 result/sp_true_2.pkl
-        # file_path = os.path.join('./result/', 'sp_true_3.pkl')  # 文件路径为 result/sp_true_3.pkl
-        # file_path = os.path.join('./result/', 'sp_true_4.pkl')  # 文件路径为 result/sp_true_4.pkl
-        with open(file_path, 'wb') as f:
-            pickle.dump(shapley_values, f)
+            file_path = os.path.join('./result/True/', f'shapley_True_{ci}.pkl')  # 文件路径为 result/sp_true_1.pkl
+            with open(file_path, 'wb') as f:
+                pickle.dump(shapley_values, f)
 
-        #随机打乱
-        shuffle__list = [[x, y] for x, y in zip(grads, shapley_values)]
-        random.shuffle(shuffle__list)
-        print('开始聚合')
-        #利用shapley值作为各个梯度之间的权重关系更新全局模型
-        global_model=shapley_juhe(global_model,server_optimizer,shuffle__list)
-        print('聚合完成,开始全局模型更新')
-        # 训练全局模型
-        global_model,loss=server_train(global_model,loss_func,device, server_optimizer,server_train_loader)
-        print(f'服务器在第{epoch}轮次的loss为{loss}')
+            #随机打乱
+            shuffle__list = [[x, y] for x, y in zip(grads, shapley_values)]
+            random.shuffle(shuffle__list)
+            print('开始聚合')
+            #利用shapley值作为各个梯度之间的权重关系更新全局模型
+            global_model=shapley_juhe(global_model,server_optimizer,shuffle__list)
+            print('聚合完成,开始全局模型更新')
+            # 训练全局模型
+            global_model,loss=server_train(global_model,loss_func,device, server_optimizer,server_train_loader)
+            print(f'服务器在第{epoch}轮次的loss为{loss}')
 
-        torch.save(global_model.state_dict(), 'global_model_params_true.pth')
-        l_model = SampleConvNet().to(device)  
-        # 加载全局模型参数
-        global_model_params = torch.load('global_model_params_true.pth')
-        l_model.load_state_dict(global_model_params)
+            torch.save(global_model.state_dict(), 'global_model_params_true.pth')
+            l_model = SampleConvNet().to(device)  
+            # 加载全局模型参数
+            global_model_params = torch.load('global_model_params_true.pth')
+            l_model.load_state_dict(global_model_params)
 
-        client_models = [l_model for _ in range(num_clients)]
-        #测试全局模型
-        s_test_acces=test_model(global_model,device,test_loader)
-        print(f'在第{epoch}轮次中server测试精度为{s_test_acces}%')
+            client_models = [l_model for _ in range(num_clients)]
+            #测试全局模型
+            s_test_acces=test_model(global_model,device,test_loader)
+            print(f'在第{epoch}轮次中server测试精度为{s_test_acces}%')
 
 if __name__ == '__main__':
     main()
